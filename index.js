@@ -25,6 +25,34 @@ function getSession(instance_id) {
   return sessions[instance_id];
 }
 
+// Callback URL for notifying Lovable backend of status changes
+const CALLBACK_URL = process.env.CALLBACK_URL || '';
+
+// Send status update to Lovable backend
+async function sendStatusCallback(instance_id, status, phone_number = null) {
+  if (!CALLBACK_URL) {
+    console.log(`[${instance_id}] No CALLBACK_URL configured, skipping status callback`);
+    return;
+  }
+  
+  try {
+    console.log(`[${instance_id}] Sending status callback: ${status}, phone: ${phone_number}`);
+    const response = await fetch(CALLBACK_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        instance_id,
+        status,
+        phone_number
+      })
+    });
+    const result = await response.text();
+    console.log(`[${instance_id}] Callback response: ${response.status} - ${result}`);
+  } catch (err) {
+    console.error(`[${instance_id}] Callback error:`, err.message);
+  }
+}
+
 // Initialize WhatsApp client for an instance
 function initClient(instance_id, webhookUrl) {
   const session = getSession(instance_id);
@@ -63,6 +91,8 @@ function initClient(instance_id, webhookUrl) {
       const qrDataUrl = await QRCode.toDataURL(qr, { width: 256, margin: 2 });
       session.qr = qrDataUrl;
       session.status = 'qr_pending';
+      // Notify backend about QR pending status
+      sendStatusCallback(instance_id, 'qr_pending');
     } catch (err) {
       console.error(`[${instance_id}] QR generation error:`, err);
     }
@@ -77,8 +107,12 @@ function initClient(instance_id, webhookUrl) {
       const info = client.info;
       session.phone = info?.wid?.user || null;
       console.log(`[${instance_id}] Connected phone: ${session.phone}`);
+      // IMPORTANT: Send callback to update database
+      sendStatusCallback(instance_id, 'connected', session.phone);
     } catch (e) {
       console.error(`[${instance_id}] Error getting phone info:`, e);
+      // Still send connected status even if we couldn't get phone
+      sendStatusCallback(instance_id, 'connected');
     }
   });
 
@@ -92,6 +126,7 @@ function initClient(instance_id, webhookUrl) {
     console.error(`[${instance_id}] Auth failure:`, msg);
     session.status = 'disconnected';
     session.qr = null;
+    sendStatusCallback(instance_id, 'disconnected');
   });
 
   client.on('disconnected', (reason) => {
@@ -100,6 +135,7 @@ function initClient(instance_id, webhookUrl) {
     session.qr = null;
     session.phone = null;
     session.client = null;
+    sendStatusCallback(instance_id, 'disconnected');
   });
 
   // Handle incoming messages -> forward to webhook
@@ -133,6 +169,7 @@ function initClient(instance_id, webhookUrl) {
   client.initialize().catch(err => {
     console.error(`[${instance_id}] Client init error:`, err);
     session.status = 'disconnected';
+    sendStatusCallback(instance_id, 'disconnected');
   });
 
   session.client = client;

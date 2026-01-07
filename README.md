@@ -2,6 +2,18 @@
 
 Backend pentru conectarea la WhatsApp Web, folosit cu aplicația Lovable.
 
+## ⚠️ IMPORTANT: Variabile de mediu necesare
+
+În Railway Dashboard → Variables, adaugă această variabilă:
+
+```
+CALLBACK_URL=https://dutiqyqvlbolbasumcsr.supabase.co/functions/v1/whatsapp-callback
+```
+
+**Fără această variabilă, statusul nu se va actualiza automat când scanezi QR-ul!**
+
+---
+
 ## Cum să faci deploy pe Railway
 
 ### Pasul 1: Creează un repository GitHub nou
@@ -20,7 +32,8 @@ Backend pentru conectarea la WhatsApp Web, folosit cu aplicația Lovable.
 
 ### Pasul 3: Configurare
 1. După deploy, copiază URL-ul public (ex: `https://xyz.up.railway.app`)
-2. În aplicația Lovable, actualizează secretul `WHATSAPP_BRIDGE_URL` cu acest URL
+2. În Railway, adaugă variabila `CALLBACK_URL` (vezi mai sus)
+3. În aplicația Lovable, actualizează secretul `WHATSAPP_BRIDGE_URL` cu URL-ul Railway
    - ⚠️ Asigură-te că include `https://` la început!
 
 ## Endpoints API
