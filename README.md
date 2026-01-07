@@ -42,7 +42,7 @@ CALLBACK_URL=https://dutiqyqvlbolbasumcsr.supabase.co/functions/v1/whatsapp-call
 |----------|--------|-----------|
 | `/health` | GET | Health check |
 | `/api/get-qr` | POST | Obține QR code pentru conectare |
-| `/api/status` | POST | Verifică statusul instanței |
+| `/api/status` | POST | Verifică statusul conexiunii |
 | `/api/disconnect` | POST | Deconectează WhatsApp |
 | `/api/send-message` | POST | Trimite mesaj |
 
@@ -51,16 +51,19 @@ CALLBACK_URL=https://dutiqyqvlbolbasumcsr.supabase.co/functions/v1/whatsapp-call
 ### POST /api/get-qr
 ```json
 {
-  "instance_id": "inst_xxxxx",
+  "connection_id": "uuid-xxxxx",
+  "instance_id": "uuid-xxxxx",
   "token": "xxxxx",
   "webhook_url": "https://your-server.com/webhook"
 }
 ```
 
+**Notă:** `connection_id` și `instance_id` sunt acceptate ambele pentru backwards compatibility.
+
 ### POST /api/send-message
 ```json
 {
-  "instance_id": "inst_xxxxx",
+  "connection_id": "uuid-xxxxx",
   "to": "40712345678",
   "message": "Hello!",
   "type": "text"
