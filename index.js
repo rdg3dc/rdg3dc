@@ -7,13 +7,13 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Store active sessions: { [instance_id]: { client, qr, status, phone } }
+// Store active sessions: { [connection_id]: { client, qr, status, phone } }
 const sessions = {};
 
 // Helper to get or create a session
-function getSession(instance_id) {
-  if (!sessions[instance_id]) {
-    sessions[instance_id] = {
+function getSession(connection_id) {
+  if (!sessions[connection_id]) {
+    sessions[connection_id] = {
       client: null,
       qr: null,
       status: 'disconnected',
@@ -21,55 +21,56 @@ function getSession(instance_id) {
       lastActivity: Date.now()
     };
   }
-  sessions[instance_id].lastActivity = Date.now();
-  return sessions[instance_id];
+  sessions[connection_id].lastActivity = Date.now();
+  return sessions[connection_id];
 }
 
 // Callback URL for notifying Lovable backend of status changes
 const CALLBACK_URL = process.env.CALLBACK_URL || '';
 
 // Send status update to Lovable backend
-async function sendStatusCallback(instance_id, status, phone_number = null) {
+async function sendStatusCallback(connection_id, status, phone_number = null) {
   if (!CALLBACK_URL) {
-    console.log(`[${instance_id}] No CALLBACK_URL configured, skipping status callback`);
+    console.log(`[${connection_id}] No CALLBACK_URL configured, skipping status callback`);
     return;
   }
   
   try {
-    console.log(`[${instance_id}] Sending status callback: ${status}, phone: ${phone_number}`);
+    console.log(`[${connection_id}] Sending status callback: ${status}, phone: ${phone_number}`);
     const response = await fetch(CALLBACK_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        instance_id,
+        connection_id,
+        instance_id: connection_id, // Keep for backwards compatibility
         status,
         phone_number
       })
     });
     const result = await response.text();
-    console.log(`[${instance_id}] Callback response: ${response.status} - ${result}`);
+    console.log(`[${connection_id}] Callback response: ${response.status} - ${result}`);
   } catch (err) {
-    console.error(`[${instance_id}] Callback error:`, err.message);
+    console.error(`[${connection_id}] Callback error:`, err.message);
   }
 }
 
-// Initialize WhatsApp client for an instance
-function initClient(instance_id, webhookUrl) {
-  const session = getSession(instance_id);
+// Initialize WhatsApp client for a connection
+function initClient(connection_id, webhookUrl) {
+  const session = getSession(connection_id);
   
   // If already connected or connecting, skip
   if (session.client && ['connected', 'connecting', 'qr_pending'].includes(session.status)) {
-    console.log(`[${instance_id}] Client already exists with status: ${session.status}`);
+    console.log(`[${connection_id}] Client already exists with status: ${session.status}`);
     return session;
   }
 
-  console.log(`[${instance_id}] Initializing new WhatsApp client...`);
+  console.log(`[${connection_id}] Initializing new WhatsApp client...`);
   
   session.status = 'connecting';
   session.qr = null;
 
   const client = new Client({
-    authStrategy: new LocalAuth({ clientId: instance_id }),
+    authStrategy: new LocalAuth({ clientId: connection_id }),
     puppeteer: {
       headless: true,
       args: [
@@ -85,62 +86,62 @@ function initClient(instance_id, webhookUrl) {
   });
 
   client.on('qr', async (qr) => {
-    console.log(`[${instance_id}] QR code received`);
+    console.log(`[${connection_id}] QR code received`);
     try {
       // Convert QR string to base64 PNG image
       const qrDataUrl = await QRCode.toDataURL(qr, { width: 256, margin: 2 });
       session.qr = qrDataUrl;
       session.status = 'qr_pending';
       // Notify backend about QR pending status
-      sendStatusCallback(instance_id, 'qr_pending');
+      sendStatusCallback(connection_id, 'qr_pending');
     } catch (err) {
-      console.error(`[${instance_id}] QR generation error:`, err);
+      console.error(`[${connection_id}] QR generation error:`, err);
     }
   });
 
   client.on('ready', async () => {
-    console.log(`[${instance_id}] WhatsApp client ready!`);
+    console.log(`[${connection_id}] WhatsApp client ready!`);
     session.status = 'connected';
     session.qr = null;
     
     try {
       const info = client.info;
       session.phone = info?.wid?.user || null;
-      console.log(`[${instance_id}] Connected phone: ${session.phone}`);
+      console.log(`[${connection_id}] Connected phone: ${session.phone}`);
       // IMPORTANT: Send callback to update database
-      sendStatusCallback(instance_id, 'connected', session.phone);
+      sendStatusCallback(connection_id, 'connected', session.phone);
     } catch (e) {
-      console.error(`[${instance_id}] Error getting phone info:`, e);
+      console.error(`[${connection_id}] Error getting phone info:`, e);
       // Still send connected status even if we couldn't get phone
-      sendStatusCallback(instance_id, 'connected');
+      sendStatusCallback(connection_id, 'connected');
     }
   });
 
   client.on('authenticated', () => {
-    console.log(`[${instance_id}] Authenticated`);
+    console.log(`[${connection_id}] Authenticated`);
     session.status = 'connecting';
     session.qr = null;
   });
 
   client.on('auth_failure', (msg) => {
-    console.error(`[${instance_id}] Auth failure:`, msg);
+    console.error(`[${connection_id}] Auth failure:`, msg);
     session.status = 'disconnected';
     session.qr = null;
-    sendStatusCallback(instance_id, 'disconnected');
+    sendStatusCallback(connection_id, 'disconnected');
   });
 
   client.on('disconnected', (reason) => {
-    console.log(`[${instance_id}] Disconnected:`, reason);
+    console.log(`[${connection_id}] Disconnected:`, reason);
     session.status = 'disconnected';
     session.qr = null;
     session.phone = null;
     session.client = null;
-    sendStatusCallback(instance_id, 'disconnected');
+    sendStatusCallback(connection_id, 'disconnected');
   });
 
   // Handle incoming messages -> forward to webhook
   client.on('message', async (message) => {
-    console.log(`[${instance_id}] Message from ${message.from}: ${message.body?.substring(0, 50)}...`);
+    console.log(`[${connection_id}] Message from ${message.from}: ${message.body?.substring(0, 50)}...`);
     
     if (webhookUrl) {
       try {
@@ -148,7 +149,8 @@ function initClient(instance_id, webhookUrl) {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            instance_id,
+            connection_id,
+            instance_id: connection_id, // Keep for backwards compatibility
             event: 'message',
             data: {
               from: message.from,
@@ -161,15 +163,15 @@ function initClient(instance_id, webhookUrl) {
           })
         });
       } catch (err) {
-        console.error(`[${instance_id}] Webhook error:`, err.message);
+        console.error(`[${connection_id}] Webhook error:`, err.message);
       }
     }
   });
 
   client.initialize().catch(err => {
-    console.error(`[${instance_id}] Client init error:`, err);
+    console.error(`[${connection_id}] Client init error:`, err);
     session.status = 'disconnected';
-    sendStatusCallback(instance_id, 'disconnected');
+    sendStatusCallback(connection_id, 'disconnected');
   });
 
   session.client = client;
@@ -181,17 +183,18 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok', sessions: Object.keys(sessions).length });
 });
 
-// Get QR code for instance
+// Get QR code for connection
 app.post('/api/get-qr', async (req, res) => {
-  const { instance_id, token, webhook_url } = req.body;
+  const { instance_id, connection_id, token, webhook_url } = req.body;
+  const connId = connection_id || instance_id; // Support both for backwards compatibility
   
-  if (!instance_id) {
-    return res.status(400).json({ error: 'instance_id required' });
+  if (!connId) {
+    return res.status(400).json({ error: 'connection_id required' });
   }
 
-  console.log(`[${instance_id}] GET-QR request`);
+  console.log(`[${connId}] GET-QR request`);
   
-  const session = initClient(instance_id, webhook_url);
+  const session = initClient(connId, webhook_url);
 
   // If already connected
   if (session.status === 'connected') {
@@ -215,13 +218,14 @@ app.post('/api/get-qr', async (req, res) => {
 
 // Get status
 app.post('/api/status', (req, res) => {
-  const { instance_id } = req.body;
+  const { instance_id, connection_id } = req.body;
+  const connId = connection_id || instance_id;
   
-  if (!instance_id) {
-    return res.status(400).json({ error: 'instance_id required' });
+  if (!connId) {
+    return res.status(400).json({ error: 'connection_id required' });
   }
 
-  const session = getSession(instance_id);
+  const session = getSession(connId);
   
   res.json({
     status: session.status,
@@ -230,24 +234,25 @@ app.post('/api/status', (req, res) => {
   });
 });
 
-// Disconnect instance
+// Disconnect connection
 app.post('/api/disconnect', async (req, res) => {
-  const { instance_id } = req.body;
+  const { instance_id, connection_id } = req.body;
+  const connId = connection_id || instance_id;
   
-  if (!instance_id) {
-    return res.status(400).json({ error: 'instance_id required' });
+  if (!connId) {
+    return res.status(400).json({ error: 'connection_id required' });
   }
 
-  console.log(`[${instance_id}] Disconnect request`);
+  console.log(`[${connId}] Disconnect request`);
   
-  const session = getSession(instance_id);
+  const session = getSession(connId);
   
   if (session.client) {
     try {
       await session.client.logout();
       await session.client.destroy();
     } catch (e) {
-      console.error(`[${instance_id}] Disconnect error:`, e);
+      console.error(`[${connId}] Disconnect error:`, e);
     }
   }
 
@@ -261,18 +266,19 @@ app.post('/api/disconnect', async (req, res) => {
 
 // Send message
 app.post('/api/send-message', async (req, res) => {
-  const { instance_id, to, message, type = 'text' } = req.body;
+  const { instance_id, connection_id, to, message, type = 'text' } = req.body;
+  const connId = connection_id || instance_id;
   
-  if (!instance_id || !to || !message) {
-    return res.status(400).json({ error: 'instance_id, to, and message required' });
+  if (!connId || !to || !message) {
+    return res.status(400).json({ error: 'connection_id, to, and message required' });
   }
 
-  console.log(`[${instance_id}] Send message to ${to}`);
+  console.log(`[${connId}] Send message to ${to}`);
   
-  const session = getSession(instance_id);
+  const session = getSession(connId);
   
   if (!session.client || session.status !== 'connected') {
-    return res.status(400).json({ error: 'Instance not connected' });
+    return res.status(400).json({ error: 'Connection not connected' });
   }
 
   try {
@@ -290,7 +296,7 @@ app.post('/api/send-message', async (req, res) => {
       timestamp: result.timestamp
     });
   } catch (err) {
-    console.error(`[${instance_id}] Send error:`, err);
+    console.error(`[${connId}] Send error:`, err);
     res.status(500).json({ error: err.message });
   }
 });
