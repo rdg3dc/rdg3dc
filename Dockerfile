@@ -39,8 +39,7 @@ RUN npm install --production
 # Copy app code
 COPY . .
 
-# Create data directory for session storage
-RUN mkdir -p /app/.wwebjs_auth && chmod 777 /app/.wwebjs_auth
+# Note: Session storage directory will be mounted as Railway Volume at /app/.wwebjs_auth
 
 EXPOSE 3001
 
