@@ -11,6 +11,12 @@ app.use(express.json());
 // Store active sessions: { [connection_id]: { client, qr, status, phone, webhookUrl } }
 const sessions = {};
 
+// Helper pentru delay-uri umane (simulează comportament real, reduce riscul de ban)
+function humanDelay(min = 500, max = 1500) {
+  const delay = Math.floor(Math.random() * (max - min + 1)) + min;
+  return new Promise(resolve => setTimeout(resolve, delay));
+}
+
 // Helper to get or create a session
 function getSession(connection_id) {
   if (!sessions[connection_id]) {
@@ -79,8 +85,7 @@ function initClient(connection_id, webhookUrl) {
   const client = new Client({
     authStrategy: new LocalAuth({ clientId: connection_id }),
     puppeteer: {
-      headless: true,
-      // Fix for ProtocolError: Runtime.callFunctionOn timed out
+      headless: "new",  // Noul mod headless, mai stabil și mai greu de detectat
       protocolTimeout: 120000,
       args: [
         '--no-sandbox',
@@ -89,7 +94,17 @@ function initClient(connection_id, webhookUrl) {
         '--disable-accelerated-2d-canvas',
         '--no-first-run',
         '--no-zygote',
-        '--disable-gpu'
+        '--disable-gpu',
+        // Anti-detecție
+        '--disable-blink-features=AutomationControlled',
+        '--disable-features=IsolateOrigins,site-per-process',
+        '--disable-web-security',
+        '--disable-extensions',
+        // Performanță
+        '--single-process',
+        '--disable-background-timer-throttling',
+        '--disable-backgrounding-occluded-windows',
+        '--disable-renderer-backgrounding'
       ]
     }
   });
@@ -229,8 +244,8 @@ async function restoreSessions() {
       // Initialize client which will use LocalAuth to restore session
       initClient(connectionId, null);
       
-      // Small delay between initializations to avoid overwhelming the system
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      // Delay uman mai mare între inițializări pentru a evita detecția
+      await humanDelay(3000, 5000);
     }
   } catch (err) {
     console.error('[Startup] Error restoring sessions:', err);
@@ -451,6 +466,9 @@ app.post('/api/send-message', async (req, res) => {
       chatId = `${chatId.replace(/[^0-9]/g, '')}@c.us`;
     }
 
+    // Delay uman înainte de trimitere (reduce riscul de ban)
+    await humanDelay(300, 800);
+    
     // Add timeout to sendMessage to prevent hanging
     const sendPromise = session.client.sendMessage(chatId, message);
     const timeoutPromise = new Promise((_, reject) => 
