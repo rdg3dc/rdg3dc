@@ -303,6 +303,51 @@ app.post('/api/send-message', async (req, res) => {
   }
 });
 
+// Keep-alive endpoint - ping to maintain session active
+app.post('/api/keep-alive', async (req, res) => {
+  const { instance_id, connection_id } = req.body;
+  const connId = connection_id || instance_id;
+  
+  if (!connId) {
+    return res.status(400).json({ error: 'connection_id required' });
+  }
+
+  const session = getSession(connId);
+  
+  if (session.client && session.status === 'connected') {
+    try {
+      // Ping WhatsApp client to keep session alive
+      const state = await session.client.getState();
+      session.lastActivity = Date.now();
+      console.log(`[${connId}] Keep-alive ping OK, state: ${state}`);
+      res.json({ status: 'alive', connection_status: session.status, state });
+    } catch (err) {
+      console.error(`[${connId}] Keep-alive error:`, err.message);
+      res.json({ status: 'error', message: err.message, connection_status: session.status });
+    }
+  } else {
+    res.json({ status: 'not_connected', connection_status: session.status });
+  }
+});
+
+// Internal keep-alive for all connected sessions (every 3 min)
+setInterval(async () => {
+  const connectedSessions = Object.entries(sessions).filter(([, s]) => s.status === 'connected' && s.client);
+  if (connectedSessions.length === 0) return;
+  
+  console.log(`[Keep-alive] Pinging ${connectedSessions.length} connected session(s)...`);
+  
+  for (const [id, session] of connectedSessions) {
+    try {
+      const state = await session.client.getState();
+      session.lastActivity = Date.now();
+      console.log(`[${id}] Internal keep-alive OK, state: ${state}`);
+    } catch (err) {
+      console.log(`[${id}] Internal keep-alive failed:`, err.message);
+    }
+  }
+}, 3 * 60 * 1000);
+
 // Cleanup inactive sessions (optional, runs every 30 min)
 setInterval(() => {
   const now = Date.now();
