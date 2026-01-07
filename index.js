@@ -73,6 +73,8 @@ function initClient(connection_id, webhookUrl) {
     authStrategy: new LocalAuth({ clientId: connection_id }),
     puppeteer: {
       headless: true,
+      // Fix for ProtocolError: Runtime.callFunctionOn timed out
+      protocolTimeout: 120000,
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
