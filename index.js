@@ -4,6 +4,16 @@ const fs = require('fs');
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const QRCode = require('qrcode');
 
+// Log library version at boot to confirm the deployed build uses the patched whatsapp-web.js
+try {
+  // For git dependencies, version may still be a semver string, but this confirms what got installed.
+  // eslint-disable-next-line import/no-dynamic-require, global-require
+  const wwebPkg = require('whatsapp-web.js/package.json');
+  console.log(`[Boot] whatsapp-web.js version: ${wwebPkg.version}`);
+} catch (e) {
+  console.log('[Boot] Could not read whatsapp-web.js package.json');
+}
+
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -35,6 +45,36 @@ function getSession(connection_id) {
 
 // Callback URL for notifying Lovable backend of status changes
 const CALLBACK_URL = process.env.CALLBACK_URL || '';
+
+// Patch WhatsApp Web runtime to avoid occasional breaking changes in internal functions.
+// In particular, some WA Web updates have caused whatsapp-web.js to throw inside WWebJS.sendSeen
+// (e.g. reading `markedUnread` from undefined). We no-op sendSeen to keep sending messages stable.
+async function applyRuntimePatches(client, connId) {
+  try {
+    // whatsapp-web.js exposes the underlying puppeteer page as `pupPage`
+    const page = client?.pupPage;
+    if (!page) {
+      console.log(`[${connId}] Runtime patch skipped: pupPage not available yet`);
+      return;
+    }
+
+    await page.evaluate(() => {
+      // eslint-disable-next-line no-undef
+      const w = window;
+      if (!w || !w.WWebJS) return;
+      if (w.WWebJS.__lovablePatchedSendSeen) return;
+
+      // Replace sendSeen with a safe no-op to avoid WA internal API mismatches.
+      // Some library flows call sendSeen implicitly during sendMessage.
+      w.WWebJS.sendSeen = async () => true;
+      w.WWebJS.__lovablePatchedSendSeen = true;
+    });
+
+    console.log(`[${connId}] Runtime patch applied: WWebJS.sendSeen overridden`);
+  } catch (e) {
+    console.log(`[${connId}] Runtime patch failed (non-fatal): ${e?.message || e}`);
+  }
+}
 
 // Send status update to Lovable backend
 async function sendStatusCallback(connection_id, status, phone_number = null) {
@@ -127,6 +167,9 @@ function initClient(connection_id, webhookUrl) {
     console.log(`[${connection_id}] WhatsApp client ready!`);
     session.status = 'connected';
     session.qr = null;
+
+    // Apply runtime patches as soon as the page is ready.
+    await applyRuntimePatches(client, connection_id);
     
     try {
       const info = client.info;
@@ -460,6 +503,9 @@ app.post('/api/send-message', async (req, res) => {
   console.log(`[${connId}] State OK, sending message...`);
 
   try {
+    // Ensure runtime patches are applied before sending.
+    await applyRuntimePatches(session.client, connId);
+
     // Format number: ensure @c.us suffix
     let chatId = to;
     if (!chatId.includes('@')) {
