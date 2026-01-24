@@ -21,6 +21,7 @@ RUN apt-get update && apt-get install -y \
     libxkbcommon0 \
     libxrandr2 \
     xdg-utils \
+    git \
     --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
