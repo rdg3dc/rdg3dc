@@ -465,6 +465,71 @@ app.post('/api/reconnect', async (req, res) => {
   res.json({ status: 'reconnecting', message: 'Attempting to reconnect...' });
 });
 
+// Check if a number has WhatsApp
+app.post('/api/check-number', async (req, res) => {
+  const { instance_id, connection_id, number } = req.body;
+  const connId = connection_id || instance_id;
+  
+  if (!connId || !number) {
+    return res.status(400).json({ error: 'connection_id and number required' });
+  }
+
+  console.log(`[${connId}] Check number: ${number}`);
+  
+  const session = getSession(connId);
+  
+  // Basic check
+  if (!session.client || session.status !== 'connected') {
+    console.log(`[${connId}] Check failed: client=${!!session.client}, status=${session.status}`);
+    return res.status(400).json({ 
+      error: 'Connection not connected',
+      status: session.status,
+      needs_reconnect: true
+    });
+  }
+
+  // Verify connection state
+  const stateCheck = await verifyConnectionState(session, connId, 3000);
+  if (!stateCheck.connected) {
+    console.log(`[${connId}] State check failed: ${stateCheck.reason}`);
+    return res.status(400).json({ 
+      error: 'WhatsApp session expired. Please reconnect.',
+      status: 'disconnected',
+      reason: stateCheck.reason,
+      needs_reconnect: true
+    });
+  }
+
+  try {
+    // Format number: ensure @c.us suffix
+    let chatId = number;
+    if (!chatId.includes('@')) {
+      chatId = `${chatId.replace(/[^0-9]/g, '')}@c.us`;
+    }
+
+    // Check if number is registered on WhatsApp
+    const numberId = await session.client.getNumberId(chatId);
+    
+    if (numberId) {
+      console.log(`[${connId}] Number ${number} has WhatsApp: ${numberId._serialized}`);
+      res.json({
+        exists: true,
+        whatsapp_id: numberId._serialized,
+        number: number
+      });
+    } else {
+      console.log(`[${connId}] Number ${number} does NOT have WhatsApp`);
+      res.json({
+        exists: false,
+        number: number
+      });
+    }
+  } catch (err) {
+    console.error(`[${connId}] Check number error:`, err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Send message - with real state verification
 app.post('/api/send-message', async (req, res) => {
   const { instance_id, connection_id, to, message, type = 'text' } = req.body;
