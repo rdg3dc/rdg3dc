@@ -321,9 +321,8 @@ async function verifyConnectionState(session, connId, timeoutMs = 5000) {
     return { connected: true, state };
   } catch (err) {
     console.log(`[${connId}] State check failed: ${err.message}`);
-    session.status = 'disconnected';
-    session.client = null;
-    sendStatusCallback(connId, 'disconnected');
+    // IMPORTANT: don't destroy the session on transient failures/timeouts.
+    // This was causing "connected" devices to be shown as disconnected.
     return { connected: false, reason: 'state_check_error', error: err.message };
   }
 }
@@ -376,6 +375,32 @@ app.post('/api/status', async (req, res) => {
   }
 
   const session = getSession(connId);
+
+  // Proactive sync: sometimes WA shows the device as linked, but our in-memory status
+  // may stay on "connecting/qr_pending" if the "ready" event didn't fire yet.
+  // If we can confirm CONNECTED state, force-session to connected and notify backend.
+  if (session.client && session.status !== 'connected') {
+    try {
+      const statePromise = session.client.getState();
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('State check timeout')), 4000)
+      );
+      const state = await Promise.race([statePromise, timeoutPromise]);
+      if (state === 'CONNECTED') {
+        session.status = 'connected';
+        session.qr = null;
+        try {
+          const info = session.client.info;
+          session.phone = info?.wid?.user || session.phone || null;
+        } catch (e) {
+          // ignore phone extraction issues
+        }
+        sendStatusCallback(connId, 'connected', session.phone);
+      }
+    } catch (e) {
+      // Do not regress status on transient errors/timeouts.
+    }
+  }
   
   // If session thinks it's connected, verify real state
   if (session.status === 'connected' && session.client) {
